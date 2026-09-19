@@ -1,0 +1,20 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug TMEZ",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=tmez",
+                    "--package=tmez"
+                ]
+            },
+            "cwd": "${workspaceFolder}",
+            "args": [],
+            "sourceLanguages": ["rust"]
+        }
+    ]
+}
