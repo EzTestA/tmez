@@ -111,7 +111,7 @@ pub fn draw_graph(
     }
 
     // --- Линия с градиентом ---
-    let thickness = 2.0_f32;
+    let thickness = 4.0_f32;
     let mut mesh = egui::Mesh::default();
 
     for (i, p) in pts.iter().enumerate() {

@@ -27,19 +27,20 @@ pub fn draw(app: &mut TmezApp, ui: &mut egui::Ui, now: f64) {
     draw_header(ui);
     ui.add_space(12.0);
 
-    // Резервируем место под нижние элементы:
-    // - полоса памяти: 100 px
-    // - нижний ряд: 80 px
-    // - два отступа между ними: 8 + 8 px
-    // - запас на отступы сверху/снизу: 8 px
-    let reserved = 100.0 + 80.0 + 8.0 + 8.0 + 8.0;
+    // Точный расчёт: сколько места занимают память и нижний ряд
+    // - memory_card: ~116
+    // - gap между верхним рядом и памятью: 8
+    // - gap между памятью и нижним рядом: 8
+    // - bottom_row: 80
+    // - запас: 10
+    let reserved = 116.0 + 8.0 + 8.0 + 80.0 + 30.0;
     let top_row_height = (ui.available_height() - reserved).max(160.0);
 
     draw_top_row(app, ui, now, top_row_height);
     ui.add_space(CARD_GAP);
     memory_card(ui, app.mem_smoothed, app.mem_used_gb, app.mem_total_gb);
     ui.add_space(CARD_GAP);
-    draw_bottom_row(ui);
+    draw_bottom_row(ui, app);
 }
 
 // ============ Заголовок вкладки ============
@@ -85,7 +86,7 @@ fn draw_top_row(app: &TmezApp, ui: &mut egui::Ui, now: f64, h: f32) {
 }
 
 // ============ Нижний ряд ============
-fn draw_bottom_row(ui: &mut egui::Ui) {
+fn draw_bottom_row(ui: &mut egui::Ui, app: &TmezApp) {
     let h = BOTTOM_ROW_HEIGHT;
 
     ui.horizontal(|ui| {
@@ -94,30 +95,78 @@ fn draw_bottom_row(ui: &mut egui::Ui) {
         let avail = ui.available_width();
         let w = ((avail - CARD_GAP * 3.0) / 4.0).max(80.0);
 
-        bottom_card(ui, "Сеть", NET_COLOR, w, h);
+        // Сеть
+        bottom_card(ui, "Сеть", NET_COLOR, w, h, &[
+            (format!("↓ {}", fmt_bps(app.net_rx_bps)), egui::Color32::from_gray(200)),
+            (format!("↑ {}", fmt_bps(app.net_tx_bps)), egui::Color32::from_gray(160)),
+        ]);
+
         ui.add_space(CARD_GAP);
-        bottom_card(ui, "Диски", DISK_COLOR, w, h);
+
+        // Диски
+        bottom_card(ui, "Диски", DISK_COLOR, w, h, &[
+            (format!("Ч {}", fmt_bps(app.disk_read_bps)), egui::Color32::from_gray(200)),
+            (format!("З {}", fmt_bps(app.disk_write_bps)), egui::Color32::from_gray(160)),
+        ]);
+
         ui.add_space(CARD_GAP);
-        bottom_card(ui, "GPU", GPU_COLOR, w, h);
+
+        // GPU
+        let gpu_temp = if app.gpu_temp_c > 0.0 {
+            format!("{:.0} °C", app.gpu_temp_c)
+        } else {
+            "—".to_string()
+        };
+        bottom_card(ui, "GPU", GPU_COLOR, w, h, &[
+            (format!("Загр: {:.0}%", app.gpu_nvidia_load * 100.0), egui::Color32::from_gray(200)),
+            (format!("Темп: {}", gpu_temp), egui::Color32::from_gray(160)),
+        ]);
+
         ui.add_space(CARD_GAP);
-        bottom_card(ui, "Питание ЦП", POWER_COLOR, w, h);
+
+        // Питание ЦП — заглушка
+        bottom_card(ui, "Питание ЦП", POWER_COLOR, w, h, &[
+            ("—".to_string(), egui::Color32::from_gray(140)),
+        ]);
     });
 }
 
-fn bottom_card(ui: &mut egui::Ui, title: &str, color: egui::Color32, w: f32, h: f32) {
+fn bottom_card(
+    ui: &mut egui::Ui,
+    title: &str,
+    color: egui::Color32,
+    w: f32,
+    h: f32,
+    lines: &[(String, egui::Color32)],
+) {
     ui.allocate_ui_with_layout(
         egui::vec2(w, h),
         egui::Layout::top_down(egui::Align::LEFT),
         |ui| {
             card_frame(ui, w, h, title, color, |ui| {
-                ui.label(
-                    egui::RichText::new("—")
-                        .size(16.0)
-                        .color(egui::Color32::from_gray(140)),
-                );
+                for (text, c) in lines {
+                    ui.label(egui::RichText::new(text).size(11.0).color(*c));
+                }
             });
         },
     );
+}
+
+/// Красиво форматирует байты/сек в КБ/с, МБ/с, ГБ/с.
+fn fmt_bps(bps: f64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+
+    if bps >= GB {
+        format!("{:.2} ГБ/с", bps / GB)
+    } else if bps >= MB {
+        format!("{:.2} МБ/с", bps / MB)
+    } else if bps >= KB {
+        format!("{:.1} КБ/с", bps / KB)
+    } else {
+        format!("{:.0} Б/с", bps)
+    }
 }
 
 // ============ SYS ============
@@ -255,64 +304,121 @@ fn cpu_overview_card(ui: &mut egui::Ui, app: &TmezApp, now: f64, w: f32, h: f32)
 // ============ TOP PROCESSES ============
 fn top_processes_card(ui: &mut egui::Ui, app: &TmezApp, w: f32, h: f32) {
     card_frame(ui, w, h, "ТОП ПО ЦП", TOP_COLOR, |ui| {
-        // Шапка
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("PID").size(11.0).color(egui::Color32::from_gray(140)));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(egui::RichText::new("ЦП").size(11.0).color(egui::Color32::from_gray(140)));
-                ui.add_space(20.0);
-                ui.label(egui::RichText::new("Имя").size(11.0).color(egui::Color32::from_gray(140)));
-            });
-        });
-        ui.add_space(2.0);
-        ui.separator();
-        ui.add_space(4.0);
+        ui.spacing_mut().item_spacing.y = 0.0;
 
-        // Сколько строк влезет в оставшуюся высоту
+        // Фиксированные ширины колонок
+        const PID_W: f32 = 55.0;
+        const NAME_W: f32 = 110.0;
+        const CPU_W: f32 = 55.0;
+        const MEM_W: f32 = 65.0;
+
+        // Расчёт количества строк, которые влезут
+        let used_height = 135.0;
+        let rows_area = (h - used_height).max(0.0);
         let row_height = 16.0;
-        let available_h = ui.available_height();
-        let max_rows = ((available_h / row_height).floor() as usize).clamp(1, 50);
+        let max_rows = (rows_area / row_height).floor() as usize;
+        let take_n = max_rows.min(app.top_processes.len());
 
-egui::ScrollArea::vertical()
-    .auto_shrink([false, false])
-    .show(ui, |ui| {
-        if app.top_processes.is_empty() {
-            ui.label(
-                egui::RichText::new("нет данных")
-                    .size(11.0)
-                    .color(egui::Color32::from_gray(100)),
-            );
-        } else {
-            for p in app.top_processes.iter().take(max_rows) {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(p.pid.to_string())
-                            .size(11.0)
-                            .color(egui::Color32::from_gray(160)),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        egui::Grid::new("top_processes_grid")
+            .num_columns(4)
+            .spacing([4.0, 3.0])
+            .min_col_width(55.0)
+            .max_col_width(200.0)
+            .show(ui, |ui| {
+                let header_color = egui::Color32::from_gray(140);
+
+                // === Шапка ===
+                cell(ui, PID_W, egui::Align::LEFT, |ui| {
+                    ui.label(egui::RichText::new("PID").size(11.0).color(header_color));
+                });
+                cell(ui, NAME_W, egui::Align::LEFT, |ui| {
+                    ui.label(egui::RichText::new("Имя").size(11.0).color(header_color));
+                });
+                cell(ui, CPU_W, egui::Align::RIGHT, |ui| {
+                    ui.label(egui::RichText::new("ЦП").size(11.0).color(header_color));
+                });
+                cell(ui, MEM_W, egui::Align::RIGHT, |ui| {
+                    ui.label(egui::RichText::new("ОЗУ").size(11.0).color(header_color));
+                });
+                ui.end_row();
+
+                // === Строки ===
+                for p in app.top_processes.iter().take(take_n) {
+                    // PID
+                    cell(ui, PID_W, egui::Align::LEFT, |ui| {
                         ui.label(
-                            egui::RichText::new(format!("{:.1}%", p.cpu))
+                            egui::RichText::new(p.pid.to_string())
                                 .size(11.0)
-                                .color(egui::Color32::from_rgb(200, 220, 240)),
+                                .color(egui::Color32::from_gray(160)),
                         );
-                        ui.add_space(20.0);
-                        let name = if p.name.len() > 20 {
-                            format!("{}…", &p.name[..19])
-                        } else {
-                            p.name.clone()
-                        };
+                    });
+
+                    // Имя
+                    let name = truncate_name(&p.name, 16);
+                    cell(ui, NAME_W, egui::Align::LEFT, |ui| {
                         ui.label(
                             egui::RichText::new(name)
                                 .size(11.0)
                                 .color(egui::Color32::from_gray(200)),
                         );
                     });
-                });
-            }
-        }
+
+                    // ЦП
+                    cell(ui, CPU_W, egui::Align::RIGHT, |ui| {
+                        ui.label(
+                            egui::RichText::new(format!("{:.1}%", p.cpu))
+                                .size(11.0)
+                                .color(egui::Color32::from_rgb(200, 220, 240)),
+                        );
+                    });
+
+                    // ОЗУ
+                    let mem_str = if p.memory_mb >= 1024.0 {
+                        format!("{:.1} ГБ", p.memory_mb / 1024.0)
+                    } else {
+                        format!("{:.0} МБ", p.memory_mb)
+                    };
+                    cell(ui, MEM_W, egui::Align::RIGHT, |ui| {
+                        ui.label(
+                            egui::RichText::new(mem_str)
+                                .size(11.0)
+                                .color(egui::Color32::from_rgb(180, 200, 220)),
+                        );
+                    });
+
+                    ui.end_row();
+                }
+            });
     });
+}
+
+/// Рисует содержимое ячейки в блоке фиксированной ширины `w`
+/// с выравниванием по горизонтали `align`.
+fn cell<F: FnOnce(&mut egui::Ui)>(
+    ui: &mut egui::Ui,
+    w: f32,
+    align: egui::Align,
+    content: F,
+) {
+    let layout = if align == egui::Align::RIGHT {
+        egui::Layout::right_to_left(egui::Align::Center)
+    } else {
+        egui::Layout::left_to_right(egui::Align::Center)
+    };
+    ui.allocate_ui_with_layout(egui::vec2(w, 14.0), layout, |ui| {
+        content(ui);
     });
+}
+
+/// Обрезает имя процесса до `max_chars` символов,
+/// добавляя «…» в конце, если не влезло.
+fn truncate_name(name: &str, max_chars: usize) -> String {
+    if name.chars().count() > max_chars {
+        let truncated: String = name.chars().take(max_chars - 1).collect();
+        format!("{}…", truncated)
+    } else {
+        name.to_string()
+    }
 }
 
 // ============ Универсальная рамка карточки с точными размерами ============

@@ -36,6 +36,26 @@ pub struct TmezApp {
 
     pub top_processes: Vec<ProcessRow>,
 
+        // Сеть
+    pub net_rx_bps: f64,
+    pub net_tx_bps: f64,
+    pub net_rx_total: u64,
+    pub net_tx_total: u64,
+    pub prev_net_rx: u64,
+    pub prev_net_tx: u64,
+    pub networks: sysinfo::Networks,
+
+    // Диски
+    pub disk_read_bps: f64,
+    pub disk_write_bps: f64,
+    pub disk_activity: f32,
+    pub prev_disk_read: u64,
+    pub prev_disk_write: u64,
+    pub disks: sysinfo::Disks,
+
+    // GPU (расширение NVML)
+    pub gpu_temp_c: f32,
+
     pub current_tab: Tab,
 }
 
@@ -81,6 +101,23 @@ impl TmezApp {
 
             top_processes: Vec::new(),
 
+            networks: sysinfo::Networks::new_with_refreshed_list(),
+            net_rx_bps: 0.0,
+            net_tx_bps: 0.0,
+            net_rx_total: 0,
+            net_tx_total: 0,
+            prev_net_rx: 0,
+            prev_net_tx: 0,
+
+            disks: sysinfo::Disks::new_with_refreshed_list(),
+            disk_read_bps: 0.0,
+            disk_write_bps: 0.0,
+            disk_activity: 0.0,
+            prev_disk_read: 0,
+            prev_disk_write: 0,
+
+            gpu_temp_c: 0.0,
+
             current_tab: Tab::Summary,
         }
     }
@@ -115,6 +152,57 @@ impl TmezApp {
         let Ok(device) = nvml.device_by_index(0) else { return 0.0; };
         match device.utilization_rates() {
             Ok(rates) => rates.gpu as f32 / 100.0,
+            Err(_) => 0.0,
+        }
+    }
+
+        /// Обновляет сетевую статистику. Должен вызываться раз в INTERVAL.
+    pub fn update_networks(&mut self) {
+        self.networks.refresh(true);
+
+        let rx: u64 = self.networks.iter().map(|(_, data)| data.total_received()).sum();
+        let tx: u64 = self.networks.iter().map(|(_, data)| data.total_transmitted()).sum();
+
+        if self.prev_net_rx > 0 {
+            let dt = INTERVAL;
+            self.net_rx_bps = (rx.saturating_sub(self.prev_net_rx)) as f64 / dt;
+            self.net_tx_bps = (tx.saturating_sub(self.prev_net_tx)) as f64 / dt;
+        }
+
+        self.prev_net_rx = rx;
+        self.prev_net_tx = tx;
+        self.net_rx_total = rx;
+        self.net_tx_total = tx;
+    }
+
+    /// Обновляет дисковую статистику. Должен вызываться раз в INTERVAL.
+    pub fn update_disks(&mut self) {
+        self.disks.refresh(true);
+
+        let read: u64 = self.disks.iter().map(|d| d.usage().read_bytes).sum();
+        let write: u64 = self.disks.iter().map(|d| d.usage().written_bytes).sum();
+
+        if self.prev_disk_read > 0 {
+            let dt = INTERVAL;
+            self.disk_read_bps = (read.saturating_sub(self.prev_disk_read)) as f64 / dt;
+            self.disk_write_bps = (write.saturating_sub(self.prev_disk_write)) as f64 / dt;
+        }
+
+        self.prev_disk_read = read;
+        self.prev_disk_write = write;
+
+        // Активность — грубая оценка: нормируем скорость к условным 200 МБ/с = 100%
+        let max_bps = 200.0 * 1024.0 * 1024.0;
+        let total_bps = self.disk_read_bps + self.disk_write_bps;
+        self.disk_activity = (total_bps / max_bps).min(1.0) as f32;
+    }
+
+    /// Читает температуру дискретной NVIDIA GPU.
+    pub fn read_gpu_temp(&self) -> f32 {
+        let Some(nvml) = &self.nvml else { return 0.0; };
+        let Ok(device) = nvml.device_by_index(0) else { return 0.0; };
+        match device.temperature(nvml_wrapper::enum_wrappers::device::TemperatureSensor::Gpu) {
+            Ok(t) => t as f32,
             Err(_) => 0.0,
         }
     }
@@ -238,6 +326,12 @@ impl eframe::App for TmezApp {
             self.mem_raw = pct;
             self.mem_used_gb = used;
             self.mem_total_gb = total;
+
+            self.top_processes = collect_top(&mut self.system, 50);
+
+            self.update_networks();
+            self.update_disks();
+            self.gpu_temp_c = self.read_gpu_temp();
 
             if self.cpu_history.len() >= MAX_POINTS {
                 self.cpu_history.remove(0);
