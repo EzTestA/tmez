@@ -1,5 +1,6 @@
 pub mod summary;
 pub mod processes;
+pub mod performance;
 
 /// Список вкладок приложения.
 #[derive(Clone, Copy, PartialEq, Eq)]

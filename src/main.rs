@@ -3,6 +3,7 @@ mod theme;
 mod widgets;
 mod tabs;
 mod processes;
+mod system_info;
 
 use app::TmezApp;
 
