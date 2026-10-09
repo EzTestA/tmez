@@ -1,6 +1,6 @@
 use eframe::egui;
 use crate::app::TmezApp;
-use crate::theme::{ACCENT, CPU_COLOR, MEM_COLOR, INTERVAL, STEP_PX};
+use crate::theme::{ACCENT, CPU_COLOR, MEM_COLOR, STEP_PX};
 use crate::widgets::graph::gradient_color;
 
 // Цвета датчиков
@@ -15,8 +15,6 @@ const CARD_EDGE:      egui::Color32 = egui::Color32::from_rgb(30, 30, 40);
 
 const SENSOR_WIDTH: f32 = 220.0;
 
-/// Датчики во вкладке «Производительность».
-/// Список формируется динамически — для каждого тома добавляется Disk(idx).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Sensor {
     Cpu,
@@ -27,7 +25,6 @@ pub enum Sensor {
 }
 
 impl Sensor {
-    /// Формирует список датчиков с учётом числа томов.
     pub fn build_list(disk_count: usize) -> Vec<Sensor> {
         let mut v = vec![Sensor::Cpu, Sensor::Memory];
         for i in 0..disk_count {
@@ -49,7 +46,7 @@ impl Sensor {
     }
 }
 
-pub fn draw(app: &mut TmezApp, ui: &mut egui::Ui, now: f64) {
+pub fn draw(app: &mut TmezApp, ui: &mut egui::Ui) {
     draw_header(ui);
     ui.add_space(12.0);
 
@@ -58,26 +55,24 @@ pub fn draw(app: &mut TmezApp, ui: &mut egui::Ui, now: f64) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
 
-        // === Левая колонка: список датчиков ===
         ui.allocate_ui_with_layout(
             egui::vec2(SENSOR_WIDTH, h),
             egui::Layout::top_down(egui::Align::LEFT),
             |ui| {
-                draw_sensor_list(app, ui, now);
+                draw_sensor_list(app, ui);
             },
         );
 
         ui.add_space(8.0);
 
-        // === Правая колонка: детальная панель ===
         ui.allocate_ui_with_layout(
             egui::vec2(ui.available_width(), h),
             egui::Layout::top_down(egui::Align::LEFT),
             |ui| {
                 match app.performance_sensor {
-                    Sensor::Cpu => draw_cpu_detail(app, ui, now),
-                    Sensor::Memory => draw_memory_detail(app, ui, now),
-                    Sensor::Disk(i) => draw_disk_detail(app, ui, i, now),
+                    Sensor::Cpu => draw_cpu_detail(app, ui),
+                    Sensor::Memory => draw_memory_detail(app, ui),
+                    Sensor::Disk(i) => draw_disk_detail(app, ui, i),
                     Sensor::Network => draw_placeholder(ui, "Сеть"),
                     Sensor::Nvidia => draw_placeholder(ui, "NVIDIA"),
                 }
@@ -86,7 +81,6 @@ pub fn draw(app: &mut TmezApp, ui: &mut egui::Ui, now: f64) {
     });
 }
 
-// ============ Заголовок вкладки ============
 fn draw_header(ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("📈").size(20.0).color(ACCENT));
@@ -100,8 +94,7 @@ fn draw_header(ui: &mut egui::Ui) {
     });
 }
 
-// ============ Список датчиков слева ============
-fn draw_sensor_list(app: &mut TmezApp, ui: &mut egui::Ui, now: f64) {
+fn draw_sensor_list(app: &mut TmezApp, ui: &mut egui::Ui) {
     let sensors = Sensor::build_list(app.disks.len());
     for sensor in sensors {
         let is_active = app.performance_sensor == sensor;
@@ -138,7 +131,6 @@ fn draw_sensor_list(app: &mut TmezApp, ui: &mut egui::Ui, now: f64) {
             ui.painter().rect_filled(accent, 1.0, sensor.color());
         }
 
-        // Иконка
         let icon_rect = egui::Rect::from_min_size(
             rect.left_top() + egui::vec2(12.0, 12.0),
             egui::vec2(20.0, 20.0),
@@ -151,7 +143,6 @@ fn draw_sensor_list(app: &mut TmezApp, ui: &mut egui::Ui, now: f64) {
             sensor.color(),
         );
 
-        // Название
         let title = sensor_title(app, &sensor);
         ui.painter().text(
             rect.left_top() + egui::vec2(40.0, 12.0),
@@ -161,7 +152,6 @@ fn draw_sensor_list(app: &mut TmezApp, ui: &mut egui::Ui, now: f64) {
             egui::Color32::from_gray(220),
         );
 
-        // Подпись
         let subtitle = sensor_subtitle(app, &sensor);
         ui.painter().text(
             rect.left_top() + egui::vec2(40.0, 32.0),
@@ -171,23 +161,20 @@ fn draw_sensor_list(app: &mut TmezApp, ui: &mut egui::Ui, now: f64) {
             egui::Color32::from_gray(160),
         );
 
-        // Мини-график
         let mini_rect = egui::Rect::from_min_size(
             rect.right_top() + egui::vec2(-76.0, 8.0),
             egui::vec2(68.0, 48.0),
         );
         let history = sensor_history(app, &sensor);
-        draw_mini_graph(ui, mini_rect, history, sensor.color(), now);
+        draw_mini_graph(ui, mini_rect, history, sensor.color());
     }
 }
 
-// ============ Мини-график ============
 fn draw_mini_graph(
     ui: &mut egui::Ui,
     rect: egui::Rect,
     history: &[crate::widgets::Sample],
     color: egui::Color32,
-    now: f64,
 ) {
     let painter = ui.painter().with_clip_rect(rect);
     painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(8, 8, 12));
@@ -200,32 +187,28 @@ fn draw_mini_graph(
     let bottom = rect.bottom() - 2.0;
     let h = rect.height() - 4.0;
 
-    let to_screen = |t: f64, v: f32| -> egui::Pos2 {
-        let x = right_x - ((now - t) / INTERVAL) as f32 * (STEP_PX * 0.4);
+    let to_screen = |age: f32, v: f32| -> egui::Pos2 {
+        let x = right_x - age * (STEP_PX * 0.4);
         let y = bottom - v.clamp(0.0, 1.0) * h;
         egui::pos2(x, y)
     };
 
     let mut pts: Vec<egui::Pos2> = history
         .iter()
-        .map(|s| to_screen(s.time, s.value))
+        .map(|s| to_screen(s.age, s.value))
         .collect();
 
-    let last_val = history.last().map(|s| s.value).unwrap_or(0.0);
-    pts.push(to_screen(now, last_val));
+    // одна живая точка — на right_x, значение = последнее записанное
+    pts.push(to_screen(0.0, history.last().map(|s| s.value).unwrap_or(0.0)));
 
     if pts.len() < 2 {
         return;
     }
 
-    painter.add(egui::Shape::line(
-        pts,
-        egui::Stroke::new(1.2_f32, color),
-    ));
+    painter.add(egui::Shape::line(pts, egui::Stroke::new(1.2_f32, color)));
 }
 
-// ============ Детальная панель CPU ============
-fn draw_cpu_detail(app: &TmezApp, ui: &mut egui::Ui, now: f64) {
+fn draw_cpu_detail(app: &TmezApp, ui: &mut egui::Ui) {
     egui::Frame::NONE
         .fill(CARD_BG)
         .stroke(egui::Stroke::new(1.0_f32, CARD_EDGE))
@@ -263,7 +246,7 @@ fn draw_cpu_detail(app: &TmezApp, ui: &mut egui::Ui, now: f64) {
             });
 
             ui.add_space(10.0);
-            draw_cores_grid(ui, app, now);
+            draw_cores_grid(ui, app);
             ui.add_space(12.0);
             draw_cpu_stats_table(ui, app);
         });
@@ -322,7 +305,7 @@ fn draw_core_bar(ui: &mut egui::Ui, app: &TmezApp) {
     });
 }
 
-fn draw_cores_grid(ui: &mut egui::Ui, app: &TmezApp, now: f64) {
+fn draw_cores_grid(ui: &mut egui::Ui, app: &TmezApp) {
     let n = app.per_core_history.len();
     if n == 0 {
         return;
@@ -364,7 +347,7 @@ fn draw_cores_grid(ui: &mut egui::Ui, app: &TmezApp, now: f64) {
                             .get(idx)
                             .copied()
                             .unwrap_or(0.0);
-                        draw_core_graph(ui, hist, live, graph_w, graph_h, now);
+                        draw_core_graph(ui, hist, live, graph_w, graph_h);
                     },
                 );
             }
@@ -379,7 +362,6 @@ fn draw_core_graph(
     live: f32,
     w: f32,
     h: f32,
-    now: f64,
 ) {
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(w, h),
@@ -414,17 +396,19 @@ fn draw_core_graph(
         return;
     }
 
-    let to_screen = |t: f64, v: f32| -> egui::Pos2 {
-        let x = right_x - ((now - t) / INTERVAL) as f32 * (STEP_PX * 0.4);
+    let scale = 0.6;
+
+    let to_screen = |age: f32, v: f32| -> egui::Pos2 {
+        let x = right_x - age * STEP_PX * scale;
         let y = bottom - v.clamp(0.0, 1.0) * inner_h;
         egui::pos2(x, y)
     };
 
     let mut pts: Vec<egui::Pos2> = history
         .iter()
-        .map(|s| to_screen(s.time, s.value))
+        .map(|s| to_screen(s.age, s.value))
         .collect();
-    pts.push(to_screen(now, live));
+    pts.push(to_screen(0.0, live));
 
     if pts.len() < 2 {
         return;
@@ -527,8 +511,7 @@ fn draw_cpu_stats_table(ui: &mut egui::Ui, app: &TmezApp) {
         });
 }
 
-// ============ Детальная панель памяти ============
-fn draw_memory_detail(app: &TmezApp, ui: &mut egui::Ui, now: f64) {
+fn draw_memory_detail(app: &TmezApp, ui: &mut egui::Ui) {
     let mem_color = MEM_COLOR;
 
     egui::Frame::NONE
@@ -563,7 +546,7 @@ fn draw_memory_detail(app: &TmezApp, ui: &mut egui::Ui, now: f64) {
 
             ui.add_space(10.0);
             let graph_h = 200.0;
-            draw_mem_graph(ui, app, mem_color, graph_h, now);
+            draw_mem_graph(ui, app, mem_color, graph_h);
             ui.add_space(12.0);
             draw_memory_stats_table(ui, app);
         });
@@ -610,7 +593,7 @@ fn draw_memory_bar(ui: &mut egui::Ui, app: &TmezApp, color: egui::Color32) {
     });
 }
 
-fn draw_mem_graph(ui: &mut egui::Ui, app: &TmezApp, color: egui::Color32, h: f32, now: f64) {
+fn draw_mem_graph(ui: &mut egui::Ui, app: &TmezApp, color: egui::Color32, h: f32) {
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), h),
         egui::Sense::hover(),
@@ -643,8 +626,8 @@ fn draw_mem_graph(ui: &mut egui::Ui, app: &TmezApp, color: egui::Color32, h: f32
         return;
     }
 
-    let to_screen = |t: f64, v: f32| -> egui::Pos2 {
-        let x = right_x - ((now - t) / INTERVAL) as f32 * (STEP_PX * 0.6);
+    let to_screen = |age: f32, v: f32| -> egui::Pos2 {
+        let x = right_x - age * STEP_PX * 0.6;
         let y = bottom - v.clamp(0.0, 1.0) * inner_h;
         egui::pos2(x, y)
     };
@@ -652,9 +635,9 @@ fn draw_mem_graph(ui: &mut egui::Ui, app: &TmezApp, color: egui::Color32, h: f32
     let mut pts: Vec<egui::Pos2> = app
         .mem_history
         .iter()
-        .map(|s| to_screen(s.time, s.value))
+        .map(|s| to_screen(s.age, s.value))
         .collect();
-    pts.push(to_screen(now, app.mem_smoothed));
+    pts.push(to_screen(0.0, app.mem_smoothed));
 
     if pts.len() < 2 {
         return;
@@ -755,8 +738,7 @@ fn draw_memory_stats_table(ui: &mut egui::Ui, app: &TmezApp) {
         });
 }
 
-// ============ Детальная панель диска (заглушка) ============
-fn draw_disk_detail(app: &TmezApp, ui: &mut egui::Ui, idx: usize, now: f64) {
+fn draw_disk_detail(app: &TmezApp, ui: &mut egui::Ui, idx: usize) {
     let list: Vec<_> = app.disks.iter().collect();
     let Some(d) = list.get(idx) else {
         draw_placeholder(ui, "Диск");
@@ -771,11 +753,9 @@ fn draw_disk_detail(app: &TmezApp, ui: &mut egui::Ui, idx: usize, now: f64) {
         _ => "—",
     };
 
-    // Читаем СГЛАЖЕННЫЕ значения для отображения
     let activity = app.per_disk_activity_smoothed.get(idx).copied().unwrap_or(0.0);
     let rate_live = app.per_disk_rate_smoothed.get(idx).copied().unwrap_or(0.0);
 
-    // Сырые — только для таблицы
     let read_bps = app.per_disk_read_bps.get(idx).copied().unwrap_or(0.0);
     let write_bps = app.per_disk_write_bps.get(idx).copied().unwrap_or(0.0);
 
@@ -787,7 +767,6 @@ fn draw_disk_detail(app: &TmezApp, ui: &mut egui::Ui, idx: usize, now: f64) {
             ui.set_min_width(ui.available_width());
             ui.set_min_height(ui.available_height());
 
-            // === 1. Заголовок с моделью ===
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(&mount)
@@ -810,11 +789,9 @@ fn draw_disk_detail(app: &TmezApp, ui: &mut egui::Ui, idx: usize, now: f64) {
             });
             ui.add_space(8.0);
 
-            // === 2. Полоса активности ===
             draw_disk_activity_bar(ui, activity, DISK_COLOR);
             ui.add_space(6.0);
 
-            // === 3. Подпись ===
             ui.label(
                 egui::RichText::new(format!("Логический том · {} · {}", fs, kind))
                     .size(11.0)
@@ -823,7 +800,6 @@ fn draw_disk_detail(app: &TmezApp, ui: &mut egui::Ui, idx: usize, now: f64) {
 
             ui.add_space(10.0);
 
-            // === 4. График % Активности ===
             ui.label(
                 egui::RichText::new("% Активности")
                     .size(11.0)
@@ -835,11 +811,10 @@ fn draw_disk_detail(app: &TmezApp, ui: &mut egui::Ui, idx: usize, now: f64) {
                 .get(idx)
                 .map(|v| v.as_slice())
                 .unwrap_or(&[]);
-            draw_disk_graph(ui, history, activity, DISK_COLOR, 140.0, now);
+            draw_disk_graph(ui, history, activity, DISK_COLOR, 140.0);
 
             ui.add_space(10.0);
 
-            // === 5. График скорости передачи ===
             ui.label(
                 egui::RichText::new("Скорость передачи")
                     .size(11.0)
@@ -851,16 +826,14 @@ fn draw_disk_detail(app: &TmezApp, ui: &mut egui::Ui, idx: usize, now: f64) {
                 .get(idx)
                 .map(|v| v.as_slice())
                 .unwrap_or(&[]);
-            draw_disk_graph(ui, rate_history, rate_live, DISK_COLOR, 140.0, now);
+            draw_disk_graph(ui, rate_history, rate_live, DISK_COLOR, 140.0);
 
             ui.add_space(12.0);
 
-            // === 6. Нижняя таблица ===
-            draw_disk_stats_table(ui, app, idx, d, read_bps, write_bps, activity);
+            draw_disk_stats_table(ui, idx, d, read_bps, write_bps, activity);
         });
 }
 
-/// Полоса активности диска — цельная, зелёная.
 fn draw_disk_activity_bar(ui: &mut egui::Ui, activity: f32, color: egui::Color32) {
     let h = 28.0;
     let total_w = ui.available_width();
@@ -902,14 +875,12 @@ fn draw_disk_activity_bar(ui: &mut egui::Ui, activity: f32, color: egui::Color32
     });
 }
 
-/// График диска (используется и для активности, и для скорости).
 fn draw_disk_graph(
     ui: &mut egui::Ui,
     history: &[crate::widgets::Sample],
     live: f32,
     color: egui::Color32,
     h: f32,
-    now: f64,
 ) {
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), h),
@@ -931,7 +902,6 @@ fn draw_disk_graph(
     let bottom = rect.bottom() - 6.0;
     let inner_h = bottom - top;
 
-    // Горизонтальная сетка
     let grid_stroke = egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(20, 20, 30));
     for frac in [0.25_f32, 0.5, 0.75, 1.0] {
         let y = bottom - frac * inner_h;
@@ -945,29 +915,27 @@ fn draw_disk_graph(
         return;
     }
 
-    let to_screen = |t: f64, v: f32| -> egui::Pos2 {
-        let x = right_x - ((now - t) / INTERVAL) as f32 * (STEP_PX * 0.6);
+    let to_screen = |age: f32, v: f32| -> egui::Pos2 {
+        let x = right_x - age * STEP_PX * 0.6;
         let y = bottom - v.clamp(0.0, 1.0) * inner_h;
         egui::pos2(x, y)
     };
 
     let mut pts: Vec<egui::Pos2> = history
         .iter()
-        .map(|s| to_screen(s.time, s.value))
+        .map(|s| to_screen(s.age, s.value))
         .collect();
-    pts.push(to_screen(now, live));
+    pts.push(to_screen(0.0, live));
 
     if pts.len() < 2 {
         return;
     }
 
-    // Градиент по высоте (зелёный → красный), как в tmog
     let thickness = 3.0_f32;
     let mut mesh = egui::Mesh::default();
     for (i, p) in pts.iter().enumerate() {
         let v = ((bottom - p.y) / inner_h).clamp(0.0, 1.0);
         let grad_color = gradient_color(v);
-        // Смешиваем цвет датчика с градиентом — но проще использовать градиент
         let _ = color;
         mesh.colored_vertex(*p, grad_color);
         mesh.colored_vertex(egui::pos2(p.x, p.y + thickness), grad_color);
@@ -980,10 +948,8 @@ fn draw_disk_graph(
     painter.add(egui::Shape::mesh(mesh));
 }
 
-/// Нижняя таблица характеристик диска.
 fn draw_disk_stats_table(
     ui: &mut egui::Ui,
-    app: &TmezApp,
     idx: usize,
     d: &sysinfo::Disk,
     read_bps: f64,
@@ -1002,7 +968,6 @@ fn draw_disk_stats_table(
         _ => "—",
     };
 
-    // System disk = тот, чей mount_point начинается с "C:" или "/" на Linux
     let is_system = d.mount_point().to_string_lossy().starts_with("C:");
 
     egui::Grid::new(format!("disk_stats_grid_{}", idx))
@@ -1013,47 +978,38 @@ fn draw_disk_stats_table(
             let lc = egui::Color32::from_gray(150);
             let vc = egui::Color32::from_gray(210);
 
-            // Строка 1
             label(ui, "Скорость чтения", lc);
             label(ui, &fmt_bps(read_bps), vc);
             label(ui, "Скорость записи", lc);
             label(ui, &fmt_bps(write_bps), vc);
             ui.end_row();
 
-            // Строка 2
             label(ui, "Всего прочитано", lc);
             label(ui, &fmt_bytes(total_read), vc);
             label(ui, "Всего записано", lc);
             label(ui, &fmt_bytes(total_write), vc);
             ui.end_row();
 
-            // Строка 3
             label(ui, "Активность", lc);
             label(ui, &format!("{:.1}%", activity * 100.0), vc);
             label(ui, "Ср. время отклика", lc);
             label(ui, "—", vc);
             ui.end_row();
 
-            // Строка 4
             label(ui, "Объём", lc);
             label(ui, &fmt_bytes(capacity), vc);
             label(ui, "Отформатировано", lc);
             label(ui, &fmt_bytes(capacity), vc);
             ui.end_row();
 
-            // Строка 5
             label(ui, "Системный диск", lc);
             label(ui, if is_system { "Да" } else { "Нет" }, vc);
             label(ui, "Тип", lc);
             label(ui, &format!("{} · {}", kind, fs), vc);
             ui.end_row();
         });
-
-    // Тихий warning про app, чтобы не удалять параметр
-    let _ = app;
 }
 
-/// Форматирует байты в КБ/МБ/ГБ/ТБ.
 fn fmt_bytes(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     const MB: f64 = KB * 1024.0;
@@ -1074,7 +1030,6 @@ fn fmt_bytes(bytes: u64) -> String {
     }
 }
 
-// ============ Заглушка ============
 fn draw_placeholder(ui: &mut egui::Ui, title: &str) {
     egui::Frame::NONE
         .fill(CARD_BG)
@@ -1098,7 +1053,6 @@ fn draw_placeholder(ui: &mut egui::Ui, title: &str) {
         });
 }
 
-// ============ Хелперы ============
 fn sensor_icon(s: &Sensor) -> &'static str {
     match s {
         Sensor::Cpu => "🔲",

@@ -1,13 +1,15 @@
 use eframe::egui;
-use crate::theme::{INTERVAL, STEP_PX};
+use crate::theme::{STEP_PX, MAX_POINTS};
 
-/// Точка истории: значение и момент времени, когда она была записана.
+/// Точка истории: значение и «возраст» (сколько INTERVAL прошло с момента записи).
 #[derive(Clone, Copy)]
 pub struct Sample {
     /// Значение 0.0..1.0
     pub value: f32,
-    /// Момент времени (egui time, секунды)
-    pub time: f64,
+    /// Возраст в единицах INTERVAL.
+    /// 0.0 — только что записана (стоит на right_x),
+    /// 1.0 — один INTERVAL назад (сдвинута на STEP_PX влево).
+    pub age: f32,
 }
 
 /// Градиент по высоте: 0.0 = зелёный, 0.5 = жёлтый, 1.0 = красный.
@@ -44,13 +46,29 @@ pub fn gradient_color(v: f32) -> egui::Color32 {
     )
 }
 
+/// Сдвигает возраст всех точек истории на `age_delta` (в единицах INTERVAL).
+/// Вызывать один раз за кадр, до добавления новых точек.
+pub fn advance_history(history: &mut [Sample], age_delta: f32) {
+    for s in history.iter_mut() {
+        s.age += age_delta;
+    }
+}
+
+/// Добавляет точку в историю с age = 0.0 и подрезает до MAX_POINTS.
+pub fn push_sample(history: &mut Vec<Sample>, value: f32) {
+    if history.len() >= MAX_POINTS {
+        history.remove(0);
+    }
+    history.push(Sample { value, age: 0.0 });
+}
+
 /// Рисует график с историей, «живой» точкой и градиентной линией.
+/// Больше не зависит от `now` — только от `age` точек.
 pub fn draw_graph(
     ui: &mut egui::Ui,
     history: &[Sample],
     live_value: f32,
     height: f32,
-    now: f64,
 ) {
     let desired_size = egui::vec2(ui.available_width(), height);
     let (rect, _) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
@@ -64,7 +82,7 @@ pub fn draw_graph(
     let bottom = rect.bottom() - 8.0;
     let h = bottom - top;
 
-    // --- Сетка (статичная) ---
+    // --- Сетка (статичный фон) ---
     let grid_stroke = egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(24, 24, 34));
 
     let mut k: i32 = 0;
@@ -89,22 +107,20 @@ pub fn draw_graph(
     }
 
     // --- Точки ---
-    let to_screen = |t: f64, v: f32| -> egui::Pos2 {
-        let x = right_x - ((now - t) / INTERVAL) as f32 * STEP_PX;
-        let y = bottom - (v.clamp(0.0, 1.0)) * h;
+    let to_screen = |age: f32, v: f32| -> egui::Pos2 {
+        let x = right_x - age * STEP_PX;
+        let y = bottom - v.clamp(0.0, 1.0) * h;
         egui::pos2(x, y)
     };
 
     let mut pts: Vec<egui::Pos2> = history
         .iter()
-        .map(|s| to_screen(s.time, s.value))
+        .map(|s| to_screen(s.age, s.value))
         .filter(|p| p.x >= left_x - STEP_PX)
         .collect();
 
-    let live = to_screen(now, live_value);
-    if live.x >= left_x - STEP_PX {
-        pts.push(live);
-    }
+    // Живая точка: age = 0 → ровно на right_x.
+    pts.push(to_screen(0.0, live_value));
 
     if pts.len() < 2 {
         return;

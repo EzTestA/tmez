@@ -23,20 +23,14 @@ const BOTTOM_ROW_HEIGHT: f32 = 80.0;
 const CARD_GAP: f32 = 8.0;
 
 // ============ Точка входа вкладки ============
-pub fn draw(app: &mut TmezApp, ui: &mut egui::Ui, now: f64) {
+pub fn draw(app: &mut TmezApp, ui: &mut egui::Ui) {
     draw_header(ui);
     ui.add_space(12.0);
 
-    // Точный расчёт: сколько места занимают память и нижний ряд
-    // - memory_card: ~116
-    // - gap между верхним рядом и памятью: 8
-    // - gap между памятью и нижним рядом: 8
-    // - bottom_row: 80
-    // - запас: 10
     let reserved = 116.0 + 8.0 + 8.0 + 80.0 + 30.0;
     let top_row_height = (ui.available_height() - reserved).max(160.0);
 
-    draw_top_row(app, ui, now, top_row_height);
+    draw_top_row(app, ui, top_row_height);
     ui.add_space(CARD_GAP);
     memory_card(ui, app.mem_smoothed, app.mem_used_gb, app.mem_total_gb);
     ui.add_space(CARD_GAP);
@@ -58,7 +52,7 @@ fn draw_header(ui: &mut egui::Ui) {
 }
 
 // ============ Верхний ряд ============
-fn draw_top_row(app: &TmezApp, ui: &mut egui::Ui, now: f64, h: f32) {
+fn draw_top_row(app: &TmezApp, ui: &mut egui::Ui, h: f32) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
 
@@ -74,7 +68,7 @@ fn draw_top_row(app: &TmezApp, ui: &mut egui::Ui, now: f64, h: f32) {
         ui.allocate_ui_with_layout(
             egui::vec2(center_w, h),
             egui::Layout::top_down(egui::Align::LEFT),
-            |ui| cpu_overview_card(ui, app, now, center_w, h),
+            |ui| cpu_overview_card(ui, app, center_w, h),
         );
         ui.add_space(CARD_GAP);
         ui.allocate_ui_with_layout(
@@ -277,7 +271,7 @@ fn draw_vertical_bar(
 }
 
 // ============ CPU OVERVIEW ============
-fn cpu_overview_card(ui: &mut egui::Ui, app: &TmezApp, now: f64, w: f32, h: f32) {
+fn cpu_overview_card(ui: &mut egui::Ui, app: &TmezApp, w: f32, h: f32) {
     card_frame(ui, w, h, "ЦП — ОБЗОР", ACCENT, |ui| {
         ui.horizontal(|ui| {
             ui.label(
@@ -297,7 +291,7 @@ fn cpu_overview_card(ui: &mut egui::Ui, app: &TmezApp, now: f64, w: f32, h: f32)
         ui.add_space(4.0);
 
         let graph_h = (ui.available_height() - 4.0).max(40.0);
-        draw_graph(ui, &app.cpu_history, app.cpu_smoothed, graph_h, now);
+        draw_graph(ui, &app.cpu_history, app.cpu_smoothed, graph_h);
     });
 }
 

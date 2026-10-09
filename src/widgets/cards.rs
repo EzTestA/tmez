@@ -7,7 +7,6 @@ pub fn cpu_card(
     ui: &mut egui::Ui,
     history: &[Sample],
     smoothed: f32,
-    now: f64,
 ) {
     ui.group(|ui| {
         ui.set_min_width(ui.available_width());
@@ -19,7 +18,7 @@ pub fn cpu_card(
                 .color(CPU_COLOR),
         );
         ui.add_space(6.0);
-        draw_graph(ui, history, smoothed, 100.0, now);
+        draw_graph(ui, history, smoothed, 100.0);
     });
 }
 
