@@ -9,6 +9,7 @@ use crate::tabs::processes as processes_tab;
 use crate::tabs::performance as performance_tab;
 use crate::tabs::performance::Sensor;
 use crate::widgets::Sample;
+use crate::widgets::graph::{advance_history, push_sample};
 use crate::processes::{collect_top, ProcessRow};
 use crate::system_info::{
     query_cpu_static_info, query_memory_static_info, query_disk_models_by_letter,
@@ -475,13 +476,11 @@ impl eframe::App for TmezApp {
 
             self.per_core_smoothed = self.per_core_usage.clone();
 
-            self.cpu_history.push(Sample {
-                value: self.cpu_smoothed,
-                time: self.last_add,
-            });
+            // Первая точка истории — age = 0.
+            push_sample(&mut self.cpu_history, self.cpu_smoothed);
         }
 
-        // Сглаживание
+        // ===== 1. Сглаживание (по dt кадра) =====
         let dt = (now - self.last_render).clamp(0.0, 0.1);
         self.last_render = now;
         let alpha = (1.0 - (-dt / TAU).exp()) as f32;
@@ -502,7 +501,8 @@ impl eframe::App for TmezApp {
             self.per_disk_activity_smoothed = self.per_disk_activity.clone();
         }
         for (i, &raw) in self.per_disk_activity.iter().enumerate() {
-            self.per_disk_activity_smoothed[i] += (raw - self.per_disk_activity_smoothed[i]) * alpha;
+            self.per_disk_activity_smoothed[i] +=
+                (raw - self.per_disk_activity_smoothed[i]) * alpha;
         }
 
         // Скорость передачи по дискам
@@ -523,13 +523,36 @@ impl eframe::App for TmezApp {
                 };
                 let total_bps = self.per_disk_read_bps[i] + self.per_disk_write_bps[i];
                 let raw_rate = (total_bps / max_bps).min(1.0) as f32;
-                self.per_disk_rate_smoothed[i] += (raw_rate - self.per_disk_rate_smoothed[i]) * alpha;
+                self.per_disk_rate_smoothed[i] +=
+                    (raw_rate - self.per_disk_rate_smoothed[i]) * alpha;
             }
         }
 
-        // Новые сэмплы раз в INTERVAL
-        while now - self.last_add >= INTERVAL {
-            self.last_add += INTERVAL;
+        // ===== 2. Сдвиг возраста всех историй =====
+        // age_delta — сколько INTERVAL-ов прошло за этот кадр.
+        // Делаем это ДО добавления новых точек, чтобы свежая точка получила age = 0.
+        let age_delta = (dt / INTERVAL) as f32;
+
+        advance_history(&mut self.cpu_history, age_delta);
+        advance_history(&mut self.mem_history, age_delta);
+        advance_history(&mut self.disk_history, age_delta);
+        advance_history(&mut self.net_history, age_delta);
+        advance_history(&mut self.nvidia_history, age_delta);
+
+        for hist in self.per_core_history.iter_mut() {
+            advance_history(hist, age_delta);
+        }
+        for hist in self.per_disk_history.iter_mut() {
+            advance_history(hist, age_delta);
+        }
+        for hist in self.per_disk_rate_history.iter_mut() {
+            advance_history(hist, age_delta);
+        }
+
+        // ===== 3. Новый сэмпл — ровно один за INTERVAL =====
+        // Используем if, а не while, чтобы при лагах не записывать несколько точек подряд.
+        if now - self.last_add >= INTERVAL {
+            self.last_add = now; // ← реальное время, без накопления ошибки
 
             self.cpu_raw = self.read_cpu();
             self.cpu_freq_ghz = self.read_cpu_freq();
@@ -553,49 +576,25 @@ impl eframe::App for TmezApp {
                 .map(|c| c.cpu_usage() / 100.0)
                 .collect();
 
+            // Синхронизация длин per-core буферов
             if self.per_core_history.len() != self.per_core_usage.len() {
                 self.per_core_history = (0..self.per_core_usage.len())
                     .map(|_| Vec::with_capacity(MAX_POINTS))
                     .collect();
             }
+            if self.per_core_smoothed.len() != self.per_core_usage.len() {
+                self.per_core_smoothed = self.per_core_usage.clone();
+            }
 
             for (i, &usage) in self.per_core_usage.iter().enumerate() {
-                let hist = &mut self.per_core_history[i];
-                if hist.len() >= MAX_POINTS {
-                    hist.remove(0);
-                }
-                hist.push(Sample {
-                    value: usage,
-                    time: self.last_add,
-                });
+                push_sample(&mut self.per_core_history[i], usage);
             }
 
-            // Общие истории
-            if self.cpu_history.len() >= MAX_POINTS {
-                self.cpu_history.remove(0);
-            }
-            self.cpu_history.push(Sample {
-                value: self.cpu_smoothed,
-                time: self.last_add,
-            });
+            // Общие истории — пишем СГЛАЖЕННЫЕ значения
+            push_sample(&mut self.cpu_history, self.cpu_smoothed);
+            push_sample(&mut self.mem_history, self.mem_smoothed);
 
-            if self.mem_history.len() >= MAX_POINTS {
-                self.mem_history.remove(0);
-            }
-            self.mem_history.push(Sample {
-                value: self.mem_smoothed,
-                time: self.last_add,
-            });
-
-            if self.disk_history.len() >= MAX_POINTS {
-                self.disk_history.remove(0);
-            }
-            self.disk_history.push(Sample {
-                value: self.disk_activity,
-                time: self.last_add,
-            });
-
-            // Per-disk
+            // Per-disk буферы
             if self.per_disk_history.len() != self.per_disk_activity.len() {
                 self.per_disk_history = (0..self.per_disk_activity.len())
                     .map(|_| Vec::with_capacity(MAX_POINTS))
@@ -609,15 +608,13 @@ impl eframe::App for TmezApp {
 
             let disks_snapshot: Vec<_> = self.disks.iter().collect();
             for i in 0..self.per_disk_activity.len() {
-                // Активность
-                let hist = &mut self.per_disk_history[i];
-                if hist.len() >= MAX_POINTS {
-                    hist.remove(0);
-                }
-                hist.push(Sample {
-                    value: self.per_disk_activity[i],
-                    time: self.last_add,
-                });
+                // Активность — берём сглаженное значение
+                let activity = self
+                    .per_disk_activity_smoothed
+                    .get(i)
+                    .copied()
+                    .unwrap_or(0.0);
+                push_sample(&mut self.per_disk_history[i], activity);
 
                 // Скорость — нормируем по типу диска
                 let max_bps = if i < disks_snapshot.len() {
@@ -631,34 +628,17 @@ impl eframe::App for TmezApp {
                 };
                 let total_bps = self.per_disk_read_bps[i] + self.per_disk_write_bps[i];
                 let rate_norm = (total_bps / max_bps).min(1.0) as f32;
-
-                let rate_hist = &mut self.per_disk_rate_history[i];
-                if rate_hist.len() >= MAX_POINTS {
-                    rate_hist.remove(0);
-                }
-                rate_hist.push(Sample {
-                    value: rate_norm,
-                    time: self.last_add,
-                });
+                push_sample(&mut self.per_disk_rate_history[i], rate_norm);
             }
+
+            // Общий диск — сырое (в этой схеме disk_activity не сглаживается отдельно)
+            push_sample(&mut self.disk_history, self.disk_activity);
 
             let net_total = self.net_rx_bps + self.net_tx_bps;
             let net_norm = (net_total / (10.0 * 1024.0 * 1024.0)).min(1.0) as f32;
-            if self.net_history.len() >= MAX_POINTS {
-                self.net_history.remove(0);
-            }
-            self.net_history.push(Sample {
-                value: net_norm,
-                time: self.last_add,
-            });
+            push_sample(&mut self.net_history, net_norm);
 
-            if self.nvidia_history.len() >= MAX_POINTS {
-                self.nvidia_history.remove(0);
-            }
-            self.nvidia_history.push(Sample {
-                value: self.gpu_nvidia_load,
-                time: self.last_add,
-            });
+            push_sample(&mut self.nvidia_history, self.gpu_nvidia_load);
         }
 
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
@@ -682,9 +662,9 @@ impl eframe::App for TmezApp {
                     .inner_margin(egui::Margin::same(20)),
             )
             .show(ctx, |ui| match self.current_tab {
-                Tab::Summary => summary_tab::draw(self, ui, now),
+                Tab::Summary => summary_tab::draw(self, ui),
                 Tab::Processes => processes_tab::draw(ui),
-                Tab::Performance => performance_tab::draw(self, ui, now),
+                Tab::Performance => performance_tab::draw(self, ui),
                 Tab::SystemInfo => tabs::draw_placeholder(ui, "Система"),
                 Tab::StartupApps => tabs::draw_placeholder(ui, "Автозагрузка"),
                 Tab::Users => tabs::draw_placeholder(ui, "Пользователи"),
